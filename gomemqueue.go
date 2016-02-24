@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/scryner/lfreequeue"
+	"github.com/gomemqueue/lfreequeue"
 )
 
 type memqueue struct {
@@ -50,15 +50,23 @@ func main() {
 func (mq *memqueue) streamMessages() {
 
 	log.Printf("Stream reader started ... ")
+	var init bool
+	var watchIterator *lfreequeue.WatchIterator
+	var iter <-chan interface{}
 
-	watchIterator := mq.queue.NewWatchIterator()
-	iter := watchIterator.Iter()
-	defer watchIterator.Close()
 L:
 	for {
 		mq.readersCond.L.Lock()
 		if mq.numReaders == 0 {
 			mq.readersCond.Wait()
+			// only init the interators once
+			if init == false {
+				watchIterator = mq.queue.NewWatchIterator()
+				iter = watchIterator.Iter()
+				defer watchIterator.Close()
+				init = true
+
+			}
 		}
 		mq.readersCond.L.Unlock()
 
@@ -118,7 +126,6 @@ func HandleStreamRequest(w http.ResponseWriter, r *http.Request) {
 
 	skipClose := false
 
-	index := len(mq.queueChan)
 	mc := make(chan string, 1024)
 	closer := make(chan bool)
 	mq.Lock()
@@ -128,6 +135,13 @@ func HandleStreamRequest(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		mq.Lock()
+		index := 0
+		// get the current index for this queue channel
+		for i, q := range mq.queueChan {
+			if q == mc {
+				index = i
+			}
+		}
 		mq.queueChan = append(mq.queueChan[:index], mq.queueChan[index+1:]...)
 		close(mc)
 		mq.queueCloser = append(mq.queueCloser[:index], mq.queueCloser[index+1:]...)
